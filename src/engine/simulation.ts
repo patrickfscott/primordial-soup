@@ -9,7 +9,7 @@ import type {
 import {
   Season, TerrainType, EventType, SpecialistType,
   createDefaultConfig, createDefaultGenome, createDefaultInteraction,
-  POPULATION_COLORS,
+  cloneGenome, POPULATION_COLORS,
 } from './types.ts';
 import {
   wrap, toIndex, fromIndex, getNeighborPositions, getNeighborCells,
@@ -62,7 +62,7 @@ export function addPopulation(
   genome: Genome,
   startX: number,
   startY: number,
-  initialCells: number = 50,
+  initialCells: number = 1,
 ): Population {
   const id = state.nextPopulationId++;
   const color = POPULATION_COLORS[id % POPULATION_COLORS.length];
@@ -97,19 +97,20 @@ export function addPopulation(
 
   state.populations.set(id, population);
 
-  // Place initial cells in a cluster around startX, startY
+  // Place initial cells around startX, startY
   let placed = 0;
   const radius = Math.ceil(Math.sqrt(initialCells));
   for (let dy = -radius; dy <= radius && placed < initialCells; dy++) {
     for (let dx = -radius; dx <= radius && placed < initialCells; dx++) {
-      if (Math.random() > 0.6) continue; // Sparse placement
+      if (initialCells > 1 && Math.random() > 0.6) continue; // Sparse placement for multi-cell starts
       const nx = wrap(startX + dx, state.config.width);
       const ny = wrap(startY + dy, state.config.height);
       const idx = toIndex(nx, ny, state.config.width);
       if (!state.grid[idx]) {
         state.grid[idx] = {
           populationId: id,
-          energy: genome.energy.maxEnergy * 0.6,
+          genome: cloneGenome(genome),
+          energy: genome.energy.maxEnergy * 0.8,
           age: 0,
           dirX: 0,
           dirY: 0,
@@ -212,7 +213,7 @@ function resolveMovement(state: SimulationState, stats: TickStats): void {
 
     const pop = populations.get(cell.populationId);
     if (!pop) continue;
-    const genome = pop.genome;
+    const genome = cell.genome;
 
     // Effective mobility (specialists may modify)
     let mobility = genome.movement.mobility;
@@ -337,7 +338,7 @@ function resolveMovement(state: SimulationState, stats: TickStats): void {
 
     cell.dirX = Math.sign(toX - fromX) || cell.dirX;
     cell.dirY = Math.sign(toY - fromY) || cell.dirY;
-    cell.energy -= pop.genome.movement.moveCost;
+    cell.energy -= cell.genome.movement.moveCost;
 
     grid[targetIdx] = cell;
     grid[winner.fromIdx] = null;
@@ -347,10 +348,7 @@ function resolveMovement(state: SimulationState, stats: TickStats): void {
     for (let i = 1; i < candidates.length; i++) {
       const loserCell = grid[candidates[i].fromIdx];
       if (loserCell) {
-        const loserPop = populations.get(loserCell.populationId);
-        if (loserPop) {
-          loserCell.energy -= loserPop.genome.movement.moveCost;
-        }
+        loserCell.energy -= loserCell.genome.movement.moveCost;
       }
     }
   }
@@ -376,7 +374,7 @@ function resolveInteractions(state: SimulationState, stats: TickStats): void {
     if (!pop) continue;
 
     const [cx, cy] = fromIndex(i, width);
-    const range = pop.genome.structure.signalingRange;
+    const range = cell.genome.structure.signalingRange;
     const neighbors = getNeighborPositions(cx, cy, width, height, range);
 
     for (const [nx, ny] of neighbors) {
@@ -384,7 +382,7 @@ function resolveInteractions(state: SimulationState, stats: TickStats): void {
       const neighbor = grid[nIdx];
       if (!neighbor || neighbor.populationId === cell.populationId) continue;
 
-      const interaction = pop.genome.interactions.get(neighbor.populationId);
+      const interaction = cell.genome.interactions.get(neighbor.populationId);
       if (!interaction) continue;
 
       // Energy transfer
@@ -417,7 +415,7 @@ function resolveInteractions(state: SimulationState, stats: TickStats): void {
     const cell = grid[i];
     if (cell && energyDeltas[i] !== 0) {
       cell.energy = Math.max(0, Math.min(
-        populations.get(cell.populationId)?.genome.energy.maxEnergy ?? 5,
+        cell.genome.energy.maxEnergy,
         cell.energy + energyDeltas[i]
       ));
     }
@@ -427,12 +425,9 @@ function resolveInteractions(state: SimulationState, stats: TickStats): void {
   for (const idx of killList) {
     const cell = grid[idx];
     if (cell) {
-      const pop = populations.get(cell.populationId);
-      if (pop) {
-        // Release energy on death
-        const tile = state.environment[idx];
-        tile.energy += cell.energy * pop.genome.energy.energyOnDeath;
-      }
+      // Release energy on death
+      const tile = state.environment[idx];
+      tile.energy += cell.energy * cell.genome.energy.energyOnDeath;
       grid[idx] = null;
       stats.deaths++;
     }
@@ -451,10 +446,7 @@ function resolveEnergy(state: SimulationState, stats: TickStats): void {
     const cell = grid[i];
     if (!cell) continue;
 
-    const pop = populations.get(cell.populationId);
-    if (!pop) continue;
-    const genome = pop.genome;
-
+    const genome = cell.genome;
     const tile = environment[i];
 
     // Energy gain
@@ -521,9 +513,7 @@ function resolveBirthDeath(state: SimulationState, stats: TickStats): void {
     const cell = grid[i];
     if (!cell) continue;
 
-    const pop = populations.get(cell.populationId);
-    if (!pop) continue;
-    const genome = pop.genome;
+    const genome = cell.genome;
     const [cx, cy] = fromIndex(i, width);
 
     // Count weighted neighbors
@@ -582,29 +572,40 @@ function resolveBirthDeath(state: SimulationState, stats: TickStats): void {
     const neighbors = getNeighborPositions(cx, cy, width, height);
 
     // Count neighbors per population with weighted contributions
-    const popContributions = new Map<number, { count: number; weighted: number; totalEnergy: number }>();
+    // Also track the highest-energy parent cell per population for genome inheritance
+    const popContributions = new Map<number, {
+      count: number; weighted: number; totalEnergy: number;
+      bestParentIdx: number; bestParentEnergy: number;
+    }>();
 
     for (const [nx, ny] of neighbors) {
-      const ncell = grid[toIndex(nx, ny, width)];
+      const nIdx = toIndex(nx, ny, width);
+      const ncell = grid[nIdx];
       if (!ncell) continue;
 
-      const pop = populations.get(ncell.populationId);
-      if (!pop) continue;
-
       if (!popContributions.has(ncell.populationId)) {
-        popContributions.set(ncell.populationId, { count: 0, weighted: 0, totalEnergy: 0 });
+        popContributions.set(ncell.populationId, {
+          count: 0, weighted: 0, totalEnergy: 0,
+          bestParentIdx: nIdx, bestParentEnergy: ncell.energy,
+        });
       }
       const contrib = popContributions.get(ncell.populationId)!;
       contrib.count++;
       contrib.weighted += 1;
       contrib.totalEnergy += ncell.energy;
+      if (ncell.energy > contrib.bestParentEnergy) {
+        contrib.bestParentEnergy = ncell.energy;
+        contrib.bestParentIdx = nIdx;
+      }
     }
 
     // For each population, check if birth conditions are met
+    // Use the highest-energy parent's genome for birth/interaction checks
     for (const [popId, contrib] of popContributions) {
       const pop = populations.get(popId);
       if (!pop) continue;
-      const genome = pop.genome;
+      const parentCell = grid[contrib.bestParentIdx]!;
+      const genome = parentCell.genome;
 
       // Apply interaction-based neighbor weight adjustments
       let adjustedCount = contrib.weighted;
@@ -622,9 +623,7 @@ function resolveBirthDeath(state: SimulationState, stats: TickStats): void {
       for (const [nx, ny] of neighbors) {
         const ncell = grid[toIndex(nx, ny, width)];
         if (!ncell || ncell.populationId === popId) continue;
-        const otherPop = populations.get(ncell.populationId);
-        if (!otherPop) continue;
-        const otherInteraction = otherPop.genome.interactions.get(popId);
+        const otherInteraction = ncell.genome.interactions.get(popId);
         if (otherInteraction && otherInteraction.birthAssist > 0) {
           birthMultiplier *= (1 + otherInteraction.birthAssist);
         }
@@ -651,10 +650,7 @@ function resolveBirthDeath(state: SimulationState, stats: TickStats): void {
   for (const idx of deathIndices) {
     const cell = grid[idx];
     if (cell) {
-      const pop = populations.get(cell.populationId);
-      if (pop) {
-        environment[idx].energy += cell.energy * pop.genome.energy.energyOnDeath;
-      }
+      environment[idx].energy += cell.energy * cell.genome.energy.energyOnDeath;
       newGrid[idx] = null;
       stats.deaths++;
     }
@@ -669,17 +665,27 @@ function resolveBirthDeath(state: SimulationState, stats: TickStats): void {
     const pop = populations.get(winner.popId);
     if (!pop) continue;
 
-    // Deduct birth energy cost from parent cells
-    const genome = pop.genome;
+    // Find the highest-energy parent cell to inherit genome from
     const [cx, cy] = fromIndex(idx, width);
     const neighbors = getNeighborPositions(cx, cy, width, height);
+    let bestParent: Cell | null = null;
     let parentCount = 0;
     for (const [nx, ny] of neighbors) {
       const ncell = grid[toIndex(nx, ny, width)];
-      if (ncell && ncell.populationId === winner.popId) parentCount++;
+      if (ncell && ncell.populationId === winner.popId) {
+        parentCount++;
+        if (!bestParent || ncell.energy > bestParent.energy) {
+          bestParent = ncell;
+        }
+      }
     }
+    if (!bestParent) continue;
+
+    const parentGenome = bestParent.genome;
+
+    // Deduct birth energy cost from parent cells
     if (parentCount > 0) {
-      const costPerParent = genome.vitality.birthEnergyCost / parentCount;
+      const costPerParent = parentGenome.vitality.birthEnergyCost / parentCount;
       for (const [nx, ny] of neighbors) {
         const nIdx = toIndex(nx, ny, width);
         const ncell = newGrid[nIdx];
@@ -689,16 +695,21 @@ function resolveBirthDeath(state: SimulationState, stats: TickStats): void {
       }
     }
 
+    // Clone parent genome and apply birth-time mutations
+    const childGenome = cloneGenome(parentGenome);
+    mutateCellGenome(childGenome, parentGenome.reproduction);
+
     // Determine specialist type
     let specialist = SpecialistType.None;
-    if (genome.structure.differentiationChance > 0 &&
-        Math.random() < genome.structure.differentiationChance) {
+    if (childGenome.structure.differentiationChance > 0 &&
+        Math.random() < childGenome.structure.differentiationChance) {
       specialist = determineSpecialist(idx, grid, width, height, winner.popId, pop);
     }
 
     newGrid[idx] = {
       populationId: winner.popId,
-      energy: genome.vitality.spawnEnergy,
+      genome: childGenome,
+      energy: childGenome.vitality.spawnEnergy,
       age: 0,
       dirX: 0,
       dirY: 0,
@@ -785,7 +796,7 @@ function resolveStructureBonuses(state: SimulationState): void {
     // Stable cluster bonus: well-connected cells get energy (3+ of 6 hex neighbors)
     if (ownCount >= 3) {
       cell.energy = Math.min(
-        populations.get(cell.populationId)?.genome.energy.maxEnergy ?? 5,
+        cell.genome.energy.maxEnergy,
         cell.energy + 0.2
       );
     }
@@ -794,11 +805,10 @@ function resolveStructureBonuses(state: SimulationState): void {
     // Already handled in birth/death phase via shellFormation gene
 
     // Bridge affinity bonus: cells connecting groups
-    const pop = populations.get(cell.populationId);
-    if (pop && pop.genome.structure.bridgeAffinity > 0 && ownCount >= 2 && ownCount <= 3 && emptyCount >= 2) {
+    if (cell.genome.structure.bridgeAffinity > 0 && ownCount >= 2 && ownCount <= 3 && emptyCount >= 2) {
       cell.energy = Math.min(
-        pop.genome.energy.maxEnergy,
-        cell.energy + pop.genome.structure.bridgeAffinity * 0.4
+        cell.genome.energy.maxEnergy,
+        cell.energy + cell.genome.structure.bridgeAffinity * 0.4
       );
     }
   }
@@ -1070,150 +1080,185 @@ function resolveGeneration(state: SimulationState): void {
 
     pop.fitness = sizeFitness * 0.4 + territoryFitness * 0.3 + energyFitness * 0.3;
 
-    // Mutate genome
-    mutateGenome(pop);
+    // Update population template genome to match average of living cells
+    // (for UI display and new-cell reference)
+    updatePopulationGenomeFromCells(state, pop);
 
     // Reset peak for next generation
     pop.peakCellCount = pop.cellCount;
   }
 
-  // Horizontal gene transfer
+  // Intra-population horizontal gene transfer (fitter cells share genes with neighbors)
+  resolveIntraPopulationHGT(state);
+
+  // Inter-population horizontal gene transfer (crossover between adjacent populations)
   resolveHorizontalGeneTransfer(state);
 }
 
-function mutateGenome(pop: Population): void {
-  const genome = pop.genome;
-  const mr = genome.reproduction.mutationRate;
-  const mm = genome.reproduction.mutationMagnitude;
-  const mb = genome.reproduction.mutationBias;
-
-  // Adaptive mutation: low fitness -> bigger mutations
-  const adaptiveFactor = pop.fitness < 0.3 ? 2.0 : pop.fitness < 0.6 ? 1.0 : 0.5;
+/** Mutate a cell genome at birth time. Uses the parent's reproduction genes to control mutation. */
+function mutateCellGenome(genome: Genome, reproGenes: Genome['reproduction']): void {
+  const mr = reproGenes.mutationRate;
+  const mm = reproGenes.mutationMagnitude;
+  const mb = reproGenes.mutationBias;
 
   const mutateGene = (
     obj: Record<string, unknown>,
     key: string,
     min: number,
     max: number,
-    genePath: string,
     isInt: boolean = false,
   ) => {
-    if (pop.lockedGenes.has(genePath)) return;
-    if (Math.random() > mr * adaptiveFactor) return;
-
+    if (Math.random() > mr) return;
     const range = max - min;
     const current = obj[key] as number;
-    const delta = (gaussianRandom() * mm * range * adaptiveFactor) + (mb * range * 0.1);
+    const delta = (gaussianRandom() * mm * range) + (mb * range * 0.1);
     let newVal = current + delta;
     newVal = Math.max(min, Math.min(max, newVal));
     if (isInt) newVal = Math.round(newVal);
-
-    pop.lineage.push({
-      generation: pop.generation,
-      gene: genePath,
-      oldValue: current,
-      newValue: newVal,
-      fitness: pop.fitness,
-    });
-
     obj[key] = newVal;
   };
 
   // Mutate vitality genes
   const v = genome.vitality as unknown as Record<string, unknown>;
-  mutateGene(v, 'birthMin', 1, 5, 'vitality.birthMin', true);
-  mutateGene(v, 'birthMax', 1, 6, 'vitality.birthMax', true);
-  mutateGene(v, 'surviveMin', 0, 4, 'vitality.surviveMin', true);
-  mutateGene(v, 'surviveMax', 1, 6, 'vitality.surviveMax', true);
-  mutateGene(v, 'longevity', 0, 1000, 'vitality.longevity', true);
-  mutateGene(v, 'birthEnergyCost', 0, 5, 'vitality.birthEnergyCost');
-  mutateGene(v, 'spawnEnergy', 0.5, 3, 'vitality.spawnEnergy');
+  mutateGene(v, 'birthMin', 1, 5, true);
+  mutateGene(v, 'birthMax', 1, 6, true);
+  mutateGene(v, 'surviveMin', 0, 4, true);
+  mutateGene(v, 'surviveMax', 1, 6, true);
+  mutateGene(v, 'longevity', 0, 1000, true);
+  mutateGene(v, 'birthEnergyCost', 0, 5);
+  mutateGene(v, 'spawnEnergy', 0.5, 3);
 
   // Mutate movement genes
   const m = genome.movement as unknown as Record<string, unknown>;
-  mutateGene(m, 'mobility', 0, 1, 'movement.mobility');
-  mutateGene(m, 'moveCost', 0, 2, 'movement.moveCost');
-  mutateGene(m, 'chemotaxis', -1, 1, 'movement.chemotaxis');
-  mutateGene(m, 'swarmPull', -1, 1, 'movement.swarmPull');
-  mutateGene(m, 'fleeThreshold', 0, 6, 'movement.fleeThreshold', true);
-  mutateGene(m, 'chaseThreshold', 0, 6, 'movement.chaseThreshold', true);
-  mutateGene(m, 'momentum', 0, 1, 'movement.momentum');
+  mutateGene(m, 'mobility', 0, 1);
+  mutateGene(m, 'moveCost', 0, 2);
+  mutateGene(m, 'chemotaxis', -1, 1);
+  mutateGene(m, 'swarmPull', -1, 1);
+  mutateGene(m, 'fleeThreshold', 0, 6, true);
+  mutateGene(m, 'chaseThreshold', 0, 6, true);
+  mutateGene(m, 'momentum', 0, 1);
 
   // Mutate energy genes
   const e = genome.energy as unknown as Record<string, unknown>;
-  mutateGene(e, 'metabolism', 0.1, 3, 'energy.metabolism');
-  mutateGene(e, 'efficiency', 0.1, 3, 'energy.efficiency');
-  mutateGene(e, 'maxEnergy', 1, 20, 'energy.maxEnergy');
-  mutateGene(e, 'starvationTolerance', 1, 10, 'energy.starvationTolerance', true);
-  mutateGene(e, 'photosynthesis', 0, 1, 'energy.photosynthesis');
-  mutateGene(e, 'energyOnDeath', 0, 1, 'energy.energyOnDeath');
+  mutateGene(e, 'metabolism', 0.1, 3);
+  mutateGene(e, 'efficiency', 0.1, 3);
+  mutateGene(e, 'maxEnergy', 1, 20);
+  mutateGene(e, 'starvationTolerance', 1, 10, true);
+  mutateGene(e, 'photosynthesis', 0, 1);
+  mutateGene(e, 'energyOnDeath', 0, 1);
 
   // Mutate structure genes
   const s = genome.structure as unknown as Record<string, unknown>;
-  mutateGene(s, 'adhesion', 0, 1, 'structure.adhesion');
-  mutateGene(s, 'signalingRange', 1, 3, 'structure.signalingRange', true);
-  mutateGene(s, 'differentiationChance', 0, 0.3, 'structure.differentiationChance');
-  mutateGene(s, 'shellFormation', 0, 1, 'structure.shellFormation');
-  mutateGene(s, 'bridgeAffinity', 0, 1, 'structure.bridgeAffinity');
+  mutateGene(s, 'adhesion', 0, 1);
+  mutateGene(s, 'signalingRange', 1, 3, true);
+  mutateGene(s, 'differentiationChance', 0, 0.3);
+  mutateGene(s, 'shellFormation', 0, 1);
+  mutateGene(s, 'bridgeAffinity', 0, 1);
 
   // Mutate reproduction genes (meta!)
   const r = genome.reproduction as unknown as Record<string, unknown>;
-  mutateGene(r, 'mutationRate', 0.001, 0.15, 'reproduction.mutationRate');
-  mutateGene(r, 'mutationMagnitude', 0.05, 1, 'reproduction.mutationMagnitude');
-  mutateGene(r, 'mutationBias', -0.5, 0.5, 'reproduction.mutationBias');
-  mutateGene(r, 'crossoverRate', 0, 0.5, 'reproduction.crossoverRate');
-  mutateGene(r, 'reproductiveRate', 0.5, 2, 'reproduction.reproductiveRate');
-  mutateGene(r, 'offspringVariance', 0, 0.3, 'reproduction.offspringVariance');
+  mutateGene(r, 'mutationRate', 0.001, 0.15);
+  mutateGene(r, 'mutationMagnitude', 0.05, 1);
+  mutateGene(r, 'mutationBias', -0.5, 0.5);
+  mutateGene(r, 'crossoverRate', 0, 0.5);
+  mutateGene(r, 'reproductiveRate', 0.5, 2);
+  mutateGene(r, 'offspringVariance', 0, 0.3);
 
   // Mutate interaction genes
-  for (const [targetId, interaction] of genome.interactions) {
+  for (const [, interaction] of genome.interactions) {
     const ig = interaction as unknown as Record<string, unknown>;
-    const prefix = `interaction.${targetId}`;
-    mutateGene(ig, 'neighborWeight', -2, 2, `${prefix}.neighborWeight`);
-    mutateGene(ig, 'suppress', 0, 1, `${prefix}.suppress`);
-    mutateGene(ig, 'energyTransfer', -1, 1, `${prefix}.energyTransfer`);
-    mutateGene(ig, 'birthAssist', 0, 1, `${prefix}.birthAssist`);
+    mutateGene(ig, 'neighborWeight', -2, 2);
+    mutateGene(ig, 'suppress', 0, 1);
+    mutateGene(ig, 'energyTransfer', -1, 1);
+    mutateGene(ig, 'birthAssist', 0, 1);
   }
 }
 
-function resolveHorizontalGeneTransfer(state: SimulationState): void {
-  const { grid, populations, config } = state;
-  const { width, height } = config;
+/** Update the population's template genome to reflect the average of its living cells */
+function updatePopulationGenomeFromCells(state: SimulationState, pop: Population): void {
+  const { grid } = state;
+  if (pop.cellCount === 0) return;
 
-  // Find populations with adjacent cells
-  const adjacencies = new Map<string, boolean>();
+  // Find the highest-energy cell and use its genome as the population template
+  // This represents the "most successful" genome variant
+  let bestCell: Cell | null = null;
+  for (let i = 0; i < grid.length; i++) {
+    const cell = grid[i];
+    if (cell && cell.populationId === pop.id) {
+      if (!bestCell || cell.energy > bestCell.energy) {
+        bestCell = cell;
+      }
+    }
+  }
+
+  if (bestCell) {
+    pop.genome = cloneGenome(bestCell.genome);
+  }
+}
+
+/** Intra-population HGT: higher-energy cells share genes with lower-energy neighbors */
+function resolveIntraPopulationHGT(state: SimulationState): void {
+  const { grid, config } = state;
+  const { width, height } = config;
 
   for (let i = 0; i < grid.length; i++) {
     const cell = grid[i];
     if (!cell) continue;
+
+    // Only cells with decent crossover rate participate
+    if (cell.genome.reproduction.crossoverRate <= 0) continue;
+    if (Math.random() > cell.genome.reproduction.crossoverRate * 2) continue;
 
     const [cx, cy] = fromIndex(i, width);
     const neighbors = getNeighborPositions(cx, cy, width, height);
 
     for (const [nx, ny] of neighbors) {
       const ncell = grid[toIndex(nx, ny, width)];
-      if (ncell && ncell.populationId !== cell.populationId) {
-        const key = `${Math.min(cell.populationId, ncell.populationId)}-${Math.max(cell.populationId, ncell.populationId)}`;
-        adjacencies.set(key, true);
+      if (!ncell || ncell.populationId !== cell.populationId) continue;
+
+      // Higher-energy cell donates a gene to lower-energy cell
+      if (cell.energy > ncell.energy * 1.3) {
+        transferRandomGene(cell.genome, ncell.genome);
+      } else if (ncell.energy > cell.energy * 1.3) {
+        transferRandomGene(ncell.genome, cell.genome);
       }
     }
   }
+}
 
-  // For each adjacent pair, check crossover
-  for (const key of adjacencies.keys()) {
-    const [idA, idB] = key.split('-').map(Number);
-    const popA = populations.get(idA);
-    const popB = populations.get(idB);
-    if (!popA || !popB) continue;
+/** Inter-population HGT: adjacent populations may exchange genes */
+function resolveHorizontalGeneTransfer(state: SimulationState): void {
+  const { grid, config } = state;
+  const { width, height } = config;
 
-    // A might acquire from B
-    if (popA.genome.reproduction.crossoverRate > 0 && Math.random() < popA.genome.reproduction.crossoverRate) {
-      transferRandomGene(popB.genome, popA.genome);
-    }
+  // Find adjacent cell pairs from different populations
+  const processed = new Set<string>();
 
-    // B might acquire from A
-    if (popB.genome.reproduction.crossoverRate > 0 && Math.random() < popB.genome.reproduction.crossoverRate) {
-      transferRandomGene(popA.genome, popB.genome);
+  for (let i = 0; i < grid.length; i++) {
+    const cell = grid[i];
+    if (!cell) continue;
+    if (cell.genome.reproduction.crossoverRate <= 0) continue;
+
+    const [cx, cy] = fromIndex(i, width);
+    const neighbors = getNeighborPositions(cx, cy, width, height);
+
+    for (const [nx, ny] of neighbors) {
+      const nIdx = toIndex(nx, ny, width);
+      const ncell = grid[nIdx];
+      if (!ncell || ncell.populationId === cell.populationId) continue;
+
+      const key = `${Math.min(i, nIdx)}-${Math.max(i, nIdx)}`;
+      if (processed.has(key)) continue;
+      processed.add(key);
+
+      // Cell might acquire from neighbor
+      if (Math.random() < cell.genome.reproduction.crossoverRate) {
+        transferRandomGene(ncell.genome, cell.genome);
+      }
+      // Neighbor might acquire from cell
+      if (ncell.genome.reproduction.crossoverRate > 0 && Math.random() < ncell.genome.reproduction.crossoverRate) {
+        transferRandomGene(cell.genome, ncell.genome);
+      }
     }
   }
 }

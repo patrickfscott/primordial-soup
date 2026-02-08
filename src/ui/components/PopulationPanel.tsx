@@ -73,7 +73,7 @@ export function PopulationPanel({ sim, onSelectPopulation, selectedPopulation }:
     const x = Math.floor(Math.random() * state.config.width * 0.6 + state.config.width * 0.2);
     const y = Math.floor(Math.random() * state.config.height * 0.6 + state.config.height * 0.2);
 
-    sim.addPop(name, genome, x, y, 50);
+    sim.addPop(name, genome, x, y, 1);
     setShowAdd(false);
     setNewName('');
   };

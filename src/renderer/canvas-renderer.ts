@@ -281,7 +281,7 @@ export class CanvasRenderer {
     let [r, g, b] = pop.color;
 
     // Brightness based on energy
-    const energyRatio = cell.energy / (pop.genome.energy.maxEnergy || 5);
+    const energyRatio = cell.energy / (cell.genome.energy.maxEnergy || 5);
     const brightness = 0.3 + energyRatio * 0.7;
 
     r = Math.floor(r * brightness);

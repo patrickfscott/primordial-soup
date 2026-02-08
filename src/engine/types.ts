@@ -138,9 +138,9 @@ export interface GeneRange {
 
 export const GENE_RANGES: Record<string, GeneRange> = {
   // Vitality
-  'vitality.birthMin':       { min: 1, max: 4, default: 2, step: 1, type: 'int', label: 'Birth Min Neighbors', group: 'Vitality' },
+  'vitality.birthMin':       { min: 1, max: 4, default: 1, step: 1, type: 'int', label: 'Birth Min Neighbors', group: 'Vitality' },
   'vitality.birthMax':       { min: 1, max: 6, default: 3, step: 1, type: 'int', label: 'Birth Max Neighbors', group: 'Vitality' },
-  'vitality.surviveMin':     { min: 0, max: 4, default: 2, step: 1, type: 'int', label: 'Survive Min Neighbors', group: 'Vitality' },
+  'vitality.surviveMin':     { min: 0, max: 4, default: 0, step: 1, type: 'int', label: 'Survive Min Neighbors', group: 'Vitality' },
   'vitality.surviveMax':     { min: 1, max: 6, default: 3, step: 1, type: 'int', label: 'Survive Max Neighbors', group: 'Vitality' },
   'vitality.longevity':      { min: 0, max: 1000, default: 0, step: 10, type: 'int', label: 'Longevity (0=immortal)', group: 'Vitality' },
   'vitality.birthEnergyCost':{ min: 0, max: 5, default: 1, step: 0.1, type: 'float', label: 'Birth Energy Cost', group: 'Vitality' },
@@ -188,6 +188,7 @@ export const INTERACTION_GENE_RANGES: Record<string, GeneRange> = {
 
 export interface Cell {
   populationId: number;
+  genome: Genome;          // per-cell genome (inherited from parent + mutations)
   energy: number;
   age: number;
   dirX: number;           // movement direction X (-1, 0, 1)
@@ -310,12 +311,28 @@ export interface DetectedStructure {
 // Default genome factory
 // ============================================================================
 
+/** Deep clone a genome, including the interactions Map */
+export function cloneGenome(g: Genome): Genome {
+  const interactions = new Map<number, InteractionGenes>();
+  for (const [k, v] of g.interactions) {
+    interactions.set(k, { ...v });
+  }
+  return {
+    vitality: { ...g.vitality },
+    movement: { ...g.movement },
+    interactions,
+    energy: { ...g.energy },
+    structure: { ...g.structure },
+    reproduction: { ...g.reproduction },
+  };
+}
+
 export function createDefaultGenome(): Genome {
   return {
     vitality: {
-      birthMin: 2,
+      birthMin: 1,
       birthMax: 3,
-      surviveMin: 2,
+      surviveMin: 0,
       surviveMax: 3,
       longevity: 0,
       birthEnergyCost: 1.0,

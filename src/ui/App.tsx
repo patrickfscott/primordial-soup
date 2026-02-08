@@ -32,13 +32,13 @@ export function App() {
 
     const state = sim.getState();
 
-    // Add a Classic Life population
+    // Add a Classic Life population (single founding cell)
     const genome1 = PRESETS[0].createGenome(); // Classic Life
-    sim.addPop('Classic Life', genome1, 40, 40, 50);
+    sim.addPop('Classic Life', genome1, 40, 40, 1);
 
-    // Add a Swarm population
+    // Add a Swarm population (single founding cell)
     const genome2 = PRESETS[1].createGenome(); // Swarm
-    sim.addPop('Swarm', genome2, 90, 90, 50);
+    sim.addPop('Swarm', genome2, 90, 90, 1);
 
     // Set up initial interactions
     const pop1 = state.populations.get(0);
