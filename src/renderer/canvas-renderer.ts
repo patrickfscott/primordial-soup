@@ -1,6 +1,10 @@
 // ============================================================================
-// Canvas-based Grid Renderer
+// Canvas-based Hex Grid Renderer
 // ============================================================================
+//
+// Renders the hex grid using a 2x2-pixel-per-cell offscreen buffer.
+// Odd rows are shifted right by 1 pixel to produce the hex stagger.
+// Offscreen dimensions: (gridWidth * 2 + 1) x (gridHeight * 2)
 
 import type { SimulationState, Cell, Population } from '../engine/types.ts';
 import { TerrainType, SpecialistType, Season } from '../engine/types.ts';
@@ -33,6 +37,13 @@ interface TrailEntry {
   age: number;
 }
 
+/** Convert grid (x, y) to pixel position in the offscreen hex buffer */
+function hexToPixel(x: number, y: number): [number, number] {
+  const px = x * 2 + (y & 1); // odd rows shift right by 1 pixel
+  const py = y * 2;
+  return [px, py];
+}
+
 export class CanvasRenderer {
   private canvas: HTMLCanvasElement;
   private ctx: CanvasRenderingContext2D;
@@ -45,6 +56,8 @@ export class CanvasRenderer {
   private cameraX = 0;
   private cameraY = 0;
   private zoom = 1;
+  private renderWidth = 0;
+  private renderHeight = 0;
 
   constructor(canvas: HTMLCanvasElement, options?: Partial<RenderOptions>) {
     this.canvas = canvas;
@@ -67,16 +80,17 @@ export class CanvasRenderer {
   render(state: SimulationState): void {
     const { config, grid, environment, populations } = state;
     const { width, height } = config;
-    const { cellSize } = this.options;
 
-    // Size offscreen canvas to grid dimensions
-    const renderWidth = width;
-    const renderHeight = height;
+    // Offscreen buffer: 2 pixels per cell + 1 for odd-row offset
+    const renderWidth = width * 2 + 1;
+    const renderHeight = height * 2;
 
     if (this.offscreen.width !== renderWidth || this.offscreen.height !== renderHeight) {
       this.offscreen.width = renderWidth;
       this.offscreen.height = renderHeight;
       this.imageData = this.offCtx.createImageData(renderWidth, renderHeight);
+      this.renderWidth = renderWidth;
+      this.renderHeight = renderHeight;
     }
 
     if (!this.imageData) return;
@@ -93,9 +107,10 @@ export class CanvasRenderer {
 
     // Draw terrain/energy background
     if (this.options.showTerrain) {
-      for (let i = 0; i < environment.length; i++) {
-        const tile = environment[i];
-        const px = i * 4;
+      for (let gi = 0; gi < environment.length; gi++) {
+        const tile = environment[gi];
+        const [gx, gy] = fromIndex(gi, width);
+        const [px, py] = hexToPixel(gx, gy);
 
         let r = 8, g = 8, b = 12;
 
@@ -107,10 +122,9 @@ export class CanvasRenderer {
             b = Math.floor(8 + intensity * 10);
             break;
           }
-          case TerrainType.BarrenWasteland: {
+          case TerrainType.BarrenWasteland:
             r = 20; g = 15; b = 10;
             break;
-          }
           case TerrainType.Oasis: {
             const intensity = Math.min(1, tile.energy / 10);
             r = Math.floor(10 + intensity * 10);
@@ -118,18 +132,15 @@ export class CanvasRenderer {
             b = Math.floor(25 + intensity * 35);
             break;
           }
-          case TerrainType.ToxicZone: {
+          case TerrainType.ToxicZone:
             r = 30; g = 10; b = 10;
             break;
-          }
-          case TerrainType.DeepVent: {
+          case TerrainType.DeepVent:
             r = 5; g = 5; b = 15;
             break;
-          }
-          case TerrainType.FlowCurrent: {
+          case TerrainType.FlowCurrent:
             r = 10; g = 15; b = 25;
             break;
-          }
         }
 
         // Energy intensity overlay
@@ -140,9 +151,7 @@ export class CanvasRenderer {
           b = Math.min(255, Math.floor(b + energyBright * 15));
         }
 
-        data[px] = r;
-        data[px + 1] = g;
-        data[px + 2] = b;
+        this.fillHexCell(data, renderWidth, px, py, r, g, b);
       }
     }
 
@@ -154,39 +163,34 @@ export class CanvasRenderer {
         if (trail.age > 15) continue;
         newTrails.push(trail);
 
-        const px = (trail.y * width + trail.x) * 4;
-        if (px >= 0 && px < data.length) {
-          const fade = 1 - trail.age / 15;
-          const alpha = fade * 0.3;
-          data[px] = Math.min(255, Math.floor(data[px] + trail.r * alpha));
-          data[px + 1] = Math.min(255, Math.floor(data[px + 1] + trail.g * alpha));
-          data[px + 2] = Math.min(255, Math.floor(data[px + 2] + trail.b * alpha));
-        }
+        const [px, py] = hexToPixel(trail.x, trail.y);
+        const fade = 1 - trail.age / 15;
+        const alpha = fade * 0.3;
+        this.blendHexCell(data, renderWidth, px, py,
+          trail.r * alpha, trail.g * alpha, trail.b * alpha);
       }
       this.trails = newTrails;
     }
 
     // Draw cells
-    for (let i = 0; i < grid.length; i++) {
-      const cell = grid[i];
+    for (let gi = 0; gi < grid.length; gi++) {
+      const cell = grid[gi];
       if (!cell) continue;
 
       const pop = populations.get(cell.populationId);
       if (!pop) continue;
 
-      const [r, g, b] = this.getCellColor(cell, pop);
-      const px = i * 4;
+      const [cr, cg, cb] = this.getCellColor(cell, pop);
+      const [gx, gy] = fromIndex(gi, width);
+      const [px, py] = hexToPixel(gx, gy);
 
-      data[px] = r;
-      data[px + 1] = g;
-      data[px + 2] = b;
+      this.fillHexCell(data, renderWidth, px, py, cr, cg, cb);
 
       // Record trail for moving cells
       if (this.options.showTrails && (cell.dirX !== 0 || cell.dirY !== 0)) {
-        const [x, y] = fromIndex(i, width);
         if (this.trails.length < this.maxTrails) {
           this.trails.push({
-            x, y,
+            x: gx, y: gy,
             r: pop.color[0],
             g: pop.color[1],
             b: pop.color[2],
@@ -199,7 +203,7 @@ export class CanvasRenderer {
     // Draw active events
     if (this.options.showEvents) {
       for (const event of state.activeEvents) {
-        this.drawEventMarker(data, width, event);
+        this.drawEventMarker(data, renderWidth, renderHeight, event);
       }
     }
 
@@ -233,6 +237,46 @@ export class CanvasRenderer {
     this.drawSeasonIndicator(state);
   }
 
+  /** Fill a 2x2 hex cell block in the ImageData */
+  private fillHexCell(
+    data: Uint8ClampedArray,
+    renderWidth: number,
+    px: number,
+    py: number,
+    r: number, g: number, b: number,
+  ): void {
+    for (let dy = 0; dy < 2; dy++) {
+      for (let dx = 0; dx < 2; dx++) {
+        const idx = ((py + dy) * renderWidth + (px + dx)) * 4;
+        if (idx >= 0 && idx < data.length - 3) {
+          data[idx] = r;
+          data[idx + 1] = g;
+          data[idx + 2] = b;
+        }
+      }
+    }
+  }
+
+  /** Additive blend a 2x2 hex cell block */
+  private blendHexCell(
+    data: Uint8ClampedArray,
+    renderWidth: number,
+    px: number,
+    py: number,
+    r: number, g: number, b: number,
+  ): void {
+    for (let dy = 0; dy < 2; dy++) {
+      for (let dx = 0; dx < 2; dx++) {
+        const idx = ((py + dy) * renderWidth + (px + dx)) * 4;
+        if (idx >= 0 && idx < data.length - 3) {
+          data[idx] = Math.min(255, Math.floor(data[idx] + r));
+          data[idx + 1] = Math.min(255, Math.floor(data[idx + 1] + g));
+          data[idx + 2] = Math.min(255, Math.floor(data[idx + 2] + b));
+        }
+      }
+    }
+  }
+
   private getCellColor(cell: Cell, pop: Population): [number, number, number] {
     let [r, g, b] = pop.color;
 
@@ -259,13 +303,13 @@ export class CanvasRenderer {
       case SpecialistType.Harvester:
         g = Math.min(255, g + 40);
         break;
-      case SpecialistType.Relay:
-        // Pulsing effect based on age
+      case SpecialistType.Relay: {
         const pulse = Math.sin(cell.age * 0.3) * 0.3 + 0.7;
         r = Math.floor(r * pulse);
         g = Math.floor(g * pulse);
         b = Math.floor(b * pulse);
         break;
+      }
     }
 
     return [
@@ -277,7 +321,8 @@ export class CanvasRenderer {
 
   private drawEventMarker(
     data: Uint8ClampedArray,
-    width: number,
+    renderWidth: number,
+    renderHeight: number,
     event: { type: string; x: number; y: number; radius: number; remainingTicks: number },
   ): void {
     const fade = Math.min(1, event.remainingTicks / 20);
@@ -292,17 +337,16 @@ export class CanvasRenderer {
       case 'rift': er = 100; eg = 100; eb = 255; break;
     }
 
-    // Draw a small marker at event center
+    // Draw marker at event center using hex pixel coords
+    const [cpx, cpy] = hexToPixel(event.x, event.y);
     for (let dy = -radius; dy <= radius; dy++) {
       for (let dx = -radius; dx <= radius; dx++) {
         if (dx * dx + dy * dy > radius * radius) continue;
-        const nx = ((event.x + dx) % width + width) % width;
-        const ny = ((event.y + dy) % width + width) % width; // simplified
-        const px = (ny * width + nx) * 4;
-        if (px >= 0 && px < data.length - 3) {
-          data[px] = Math.min(255, Math.floor(data[px] + er * fade * 0.5));
-          data[px + 1] = Math.min(255, Math.floor(data[px + 1] + eg * fade * 0.5));
-          data[px + 2] = Math.min(255, Math.floor(data[px + 2] + eb * fade * 0.5));
+        const px = cpx + dx * 2;
+        const py = cpy + dy * 2;
+        if (px >= 0 && px < renderWidth - 1 && py >= 0 && py < renderHeight - 1) {
+          this.blendHexCell(data, renderWidth, px, py,
+            er * fade * 0.5, eg * fade * 0.5, eb * fade * 0.5);
         }
       }
     }

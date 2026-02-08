@@ -42,9 +42,9 @@ export enum EventType {
 // Genome Definition
 // ============================================================================
 
-/** Vitality genes — birth & death parameters */
+/** Vitality genes — birth & death parameters (hex grid: 6 neighbors max) */
 export interface VitalityGenes {
-  birthMin: number;       // 1–5, default 3
+  birthMin: number;       // 1–4, default 2
   birthMax: number;       // 1–6, default 3
   surviveMin: number;     // 0–4, default 2
   surviveMax: number;     // 1–6, default 3
@@ -138,7 +138,7 @@ export interface GeneRange {
 
 export const GENE_RANGES: Record<string, GeneRange> = {
   // Vitality
-  'vitality.birthMin':       { min: 1, max: 5, default: 3, step: 1, type: 'int', label: 'Birth Min Neighbors', group: 'Vitality' },
+  'vitality.birthMin':       { min: 1, max: 4, default: 2, step: 1, type: 'int', label: 'Birth Min Neighbors', group: 'Vitality' },
   'vitality.birthMax':       { min: 1, max: 6, default: 3, step: 1, type: 'int', label: 'Birth Max Neighbors', group: 'Vitality' },
   'vitality.surviveMin':     { min: 0, max: 4, default: 2, step: 1, type: 'int', label: 'Survive Min Neighbors', group: 'Vitality' },
   'vitality.surviveMax':     { min: 1, max: 6, default: 3, step: 1, type: 'int', label: 'Survive Max Neighbors', group: 'Vitality' },
@@ -313,7 +313,7 @@ export interface DetectedStructure {
 export function createDefaultGenome(): Genome {
   return {
     vitality: {
-      birthMin: 3,
+      birthMin: 2,
       birthMax: 3,
       surviveMin: 2,
       surviveMax: 3,

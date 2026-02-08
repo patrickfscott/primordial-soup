@@ -744,9 +744,9 @@ function determineSpecialist(
   // Weight by context
   const weights = [
     { type: SpecialistType.Scout, weight: ownCount <= 2 ? 3 : 1 },
-    { type: SpecialistType.Guardian, weight: hostileCount >= 3 ? 4 : hostileCount >= 1 ? 2 : 0.5 },
+    { type: SpecialistType.Guardian, weight: hostileCount >= 2 ? 4 : hostileCount >= 1 ? 2 : 0.5 },
     { type: SpecialistType.Harvester, weight: 1.5 },
-    { type: SpecialistType.Relay, weight: ownCount >= 2 && ownCount <= 4 ? 2 : 0.5 },
+    { type: SpecialistType.Relay, weight: ownCount >= 2 && ownCount <= 3 ? 2 : 0.5 },
   ];
 
   const totalWeight = weights.reduce((s, w) => s + w.weight, 0);
@@ -782,8 +782,8 @@ function resolveStructureBonuses(state: SimulationState): void {
       else if (ncell.populationId === cell.populationId) ownCount++;
     }
 
-    // Stable cluster bonus: well-connected cells get energy
-    if (ownCount >= 4) {
+    // Stable cluster bonus: well-connected cells get energy (3+ of 6 hex neighbors)
+    if (ownCount >= 3) {
       cell.energy = Math.min(
         populations.get(cell.populationId)?.genome.energy.maxEnergy ?? 5,
         cell.energy + 0.2
@@ -795,7 +795,7 @@ function resolveStructureBonuses(state: SimulationState): void {
 
     // Bridge affinity bonus: cells connecting groups
     const pop = populations.get(cell.populationId);
-    if (pop && pop.genome.structure.bridgeAffinity > 0 && ownCount >= 2 && ownCount <= 4 && emptyCount >= 3) {
+    if (pop && pop.genome.structure.bridgeAffinity > 0 && ownCount >= 2 && ownCount <= 3 && emptyCount >= 2) {
       cell.energy = Math.min(
         pop.genome.energy.maxEnergy,
         cell.energy + pop.genome.structure.bridgeAffinity * 0.4

@@ -32,8 +32,8 @@ function mergeGenome(overrides: Partial<{
 export const PRESETS: PresetArchetype[] = [
   {
     name: 'Classic Life',
-    description: 'Standard Conway\'s Game of Life rules with energy.',
-    strategy: 'Classic GoL patterns emerge naturally.',
+    description: 'Hex adaptation of Conway\'s Game of Life rules with energy.',
+    strategy: 'Classic GoL patterns emerge naturally on the hex grid.',
     weakness: 'No movement or interactions.',
     createGenome: () => mergeGenome({}),
   },
