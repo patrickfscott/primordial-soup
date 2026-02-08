@@ -13,6 +13,51 @@ export interface PresetArchetype {
   createGenome: () => Genome;
 }
 
+/** Create a genome with all genes randomized within valid ranges */
+export function createRandomGenome(): Genome {
+  const r = (min: number, max: number) => min + Math.random() * (max - min);
+  const ri = (min: number, max: number) => Math.round(r(min, max));
+
+  const base = createDefaultGenome();
+  base.vitality.birthMin = ri(1, 3);
+  base.vitality.birthMax = ri(base.vitality.birthMin, 5);
+  base.vitality.surviveMin = ri(0, 2);
+  base.vitality.surviveMax = ri(base.vitality.surviveMin + 1, 5);
+  base.vitality.longevity = Math.random() < 0.3 ? ri(100, 800) : 0;
+  base.vitality.birthEnergyCost = r(0.3, 2.0);
+  base.vitality.spawnEnergy = r(0.5, 2.0);
+
+  base.movement.mobility = r(0, 1);
+  base.movement.moveCost = r(0.1, 1.0);
+  base.movement.chemotaxis = r(-0.5, 0.7);
+  base.movement.swarmPull = r(-0.5, 0.5);
+  base.movement.fleeThreshold = ri(0, 3);
+  base.movement.chaseThreshold = ri(0, 3);
+  base.movement.momentum = r(0, 0.7);
+
+  base.energy.metabolism = r(0.3, 2.0);
+  base.energy.efficiency = r(0.3, 2.0);
+  base.energy.maxEnergy = r(3, 12);
+  base.energy.starvationTolerance = ri(2, 7);
+  base.energy.photosynthesis = r(0, 0.6);
+  base.energy.energyOnDeath = r(0.2, 0.8);
+
+  base.structure.adhesion = r(0.1, 0.9);
+  base.structure.signalingRange = ri(1, 2);
+  base.structure.differentiationChance = Math.random() < 0.3 ? r(0.05, 0.2) : 0;
+  base.structure.shellFormation = Math.random() < 0.3 ? r(0.2, 0.7) : 0;
+  base.structure.bridgeAffinity = Math.random() < 0.3 ? r(0.2, 0.6) : 0;
+
+  base.reproduction.mutationRate = r(0.01, 0.08);
+  base.reproduction.mutationMagnitude = r(0.1, 0.5);
+  base.reproduction.mutationBias = r(-0.2, 0.2);
+  base.reproduction.crossoverRate = Math.random() < 0.4 ? r(0.05, 0.3) : 0;
+  base.reproduction.reproductiveRate = r(0.7, 1.5);
+  base.reproduction.offspringVariance = r(0, 0.15);
+
+  return base;
+}
+
 function mergeGenome(overrides: Partial<{
   vitality: Partial<Genome['vitality']>;
   movement: Partial<Genome['movement']>;

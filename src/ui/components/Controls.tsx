@@ -7,9 +7,10 @@ import { colors, button, buttonOutline } from '../styles.ts';
 
 interface ControlsProps {
   sim: SimulationControls;
+  onNewSimulation?: () => void;
 }
 
-export function Controls({ sim }: ControlsProps) {
+export function Controls({ sim, onNewSimulation }: ControlsProps) {
   const speedOptions = [1, 2, 5, 10, 25, 50, 100];
 
   return (
@@ -60,13 +61,17 @@ export function Controls({ sim }: ControlsProps) {
         </select>
       </div>
 
-      {/* Reset */}
-      <button
-        style={{ ...buttonOutline, marginLeft: 'auto' }}
-        onClick={() => sim.reset()}
-      >
-        Reset
-      </button>
+      {/* New Simulation / Reset */}
+      <div style={{ marginLeft: 'auto', display: 'flex', gap: 6 }}>
+        {onNewSimulation && (
+          <button style={buttonOutline} onClick={onNewSimulation}>
+            New
+          </button>
+        )}
+        <button style={buttonOutline} onClick={() => sim.reset()}>
+          Reset
+        </button>
+      </div>
 
       {/* Stats */}
       <div style={{ fontSize: 11, color: colors.textDim, marginLeft: 8 }}>

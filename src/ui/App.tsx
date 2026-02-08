@@ -9,12 +9,13 @@ import { Controls } from './components/Controls.tsx';
 import { PopulationPanel } from './components/PopulationPanel.tsx';
 import { GenomeEditor } from './components/GenomeEditor.tsx';
 import { Dashboard, type PopulationHistory } from './components/Dashboard.tsx';
-import { PRESETS } from '../engine/presets.ts';
+import { SetupScreen, type CultureConfig } from './components/SetupScreen.tsx';
 import { createDefaultInteraction } from '../engine/types.ts';
 import { colors } from './styles.ts';
 
 export function App() {
   const sim = useSimulation({ width: 128, height: 128 });
+  const [started, setStarted] = useState(false);
   const [selectedPopulation, setSelectedPopulation] = useState<number | null>(null);
   const [showTerrain, setShowTerrain] = useState(true);
   const [showTrails, setShowTrails] = useState(true);
@@ -23,46 +24,54 @@ export function App() {
   const [, setRenderTick] = useState(0);
   const historyRef = useRef<PopulationHistory[]>([]);
   const lastHistoryTick = useRef(-1);
-  const initialized = useRef(false);
 
-  // Initialize with two default populations
-  useEffect(() => {
-    if (initialized.current) return;
-    initialized.current = true;
+  const handleStart = useCallback((cultures: CultureConfig[]) => {
+    // Reset simulation to clear any previous state
+    sim.reset();
 
+    // Add each culture
     const state = sim.getState();
+    const w = state.config.width;
+    const h = state.config.height;
 
-    // Add a Classic Life population (single founding cell)
-    const genome1 = PRESETS[0].createGenome(); // Classic Life
-    sim.addPop('Classic Life', genome1, 40, 40, 1);
+    // Distribute starting positions evenly around the grid
+    cultures.forEach((culture, i) => {
+      const angle = (2 * Math.PI * i) / cultures.length;
+      const cx = Math.round(w / 2 + Math.cos(angle) * w * 0.25);
+      const cy = Math.round(h / 2 + Math.sin(angle) * h * 0.25);
+      sim.addPop(culture.name, culture.genome, cx, cy, culture.startingCells);
+    });
 
-    // Add a Swarm population (single founding cell)
-    const genome2 = PRESETS[1].createGenome(); // Swarm
-    sim.addPop('Swarm', genome2, 90, 90, 1);
-
-    // Set up initial interactions
-    const pop1 = state.populations.get(0);
-    const pop2 = state.populations.get(1);
-    if (pop1 && pop2) {
-      pop1.genome.interactions.set(1, {
-        neighborWeight: -0.5,
-        suppress: 0.0,
-        energyTransfer: 0.0,
-        birthAssist: 0.0,
-        signalMask: true,
-      });
-      pop2.genome.interactions.set(0, {
-        neighborWeight: -0.5,
-        suppress: 0.0,
-        energyTransfer: 0.0,
-        birthAssist: 0.0,
-        signalMask: true,
-      });
+    // Set up default competitive interactions between all populations
+    for (const [idA, popA] of state.populations) {
+      for (const [idB] of state.populations) {
+        if (idA === idB) continue;
+        if (!popA.genome.interactions.has(idB)) {
+          popA.genome.interactions.set(idB, {
+            ...createDefaultInteraction(),
+            neighborWeight: -0.3,
+          });
+        }
+      }
     }
+
+    historyRef.current = [];
+    lastHistoryTick.current = -1;
+    setStarted(true);
+  }, [sim]);
+
+  const handleBackToSetup = useCallback(() => {
+    sim.pause();
+    sim.reset();
+    historyRef.current = [];
+    lastHistoryTick.current = -1;
+    setStarted(false);
+    setSelectedPopulation(null);
   }, [sim]);
 
   // Record history periodically
   useEffect(() => {
+    if (!started) return;
     const interval = setInterval(() => {
       const state = sim.getState();
       if (state.tick !== lastHistoryTick.current && state.running) {
@@ -82,11 +91,16 @@ export function App() {
     }, 200);
 
     return () => clearInterval(interval);
-  }, [sim]);
+  }, [sim, started]);
 
   const handleGenomeChange = useCallback(() => {
     setRenderTick(t => t + 1);
   }, []);
+
+  // Setup screen
+  if (!started) {
+    return <SetupScreen onStart={handleStart} />;
+  }
 
   const state = sim.getState();
 
@@ -132,7 +146,7 @@ export function App() {
       </div>
 
       {/* Controls */}
-      <Controls sim={sim} />
+      <Controls sim={sim} onNewSimulation={handleBackToSetup} />
 
       {/* Main area */}
       <div style={{ flex: 1, display: 'flex', gap: 8, overflow: 'hidden' }}>
